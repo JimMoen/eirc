@@ -1,0 +1,6 @@
+-sname eirc
+
+-setcookie eirc_cookie
+
++K true
++A30
