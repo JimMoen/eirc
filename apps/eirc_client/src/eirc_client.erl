@@ -76,7 +76,7 @@ user_edit_message(SenderId, "R") ->
 user_edit_message(SenderId, "D") ->
     %% I = io:get_line("Id(integer): "),
     %% {Id, _Info} = string:to_integer(I),
-    [SenderId, disconnect, 0, 0];
+    [SenderId, client_disconnect, 0, 0];
 %% invalid
 user_edit_message(_, _) ->
     io:format("invalid operation. ~n"),

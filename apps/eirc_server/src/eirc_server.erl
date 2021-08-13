@@ -45,63 +45,86 @@ loop(Socket) ->
             [SenderId, Signal, ReceiverId, Message] = binary_to_term(Bin),
             if
                 Signal =:= client_connect ->
-                    client_connect(SenderId, Socket),
+                    ConnectResult = client_connect(SenderId, Socket),
+                    gen_tcp:send(Socket, term_to_binary(ConnectResult)),
                     loop(Socket);
                 Signal =:= client_disconnect ->
-                    client_disconnect(SenderId, Socket),
+                    DisconnectResult = client_disconnect(SenderId, Socket),
+                    gen_tcp:send(Socket, term_to_binary(DisconnectResult)),
                     loop(Socket);
                 Signal =:= private_chat ->
-                    private_chat(SenderId, ReceiverId, Message),
+                    PrivateResult = private_chat(SenderId, ReceiverId, Message),
+                    gen_tcp:send(Socket, term_to_binary(PrivateResult)),
                     loop(Socket);
                 Signal =:= room_chat ->
-                    room_chat(SenderId, Message),
+                    RoomChatRes = room_chat(SenderId, Socket, Message),
+                    gen_tcp:send(Socket, term_to_binary(RoomChatRes)),
                     loop(Socket);
-                %% Signal =:= register_user -> register_user(SenderId, Socket);
-                %% Signal =:= login_user -> login_user(SenderId, Socket);
-                %% Signal =:= logout_user -> logout_user(SenderId, Socket);
                 %% and so on behavior
-                true -> io:format("Error signal ~p~n"),
-                        loop(Socket)
+                true ->
+                    io:format("Error signal."),
+                    loop(Socket)
             end;
         {tcp_closed, Socket} ->
             io:format("Server socket closed~n")
     end.
 
 %% user connect and auto login
-
+%% return a string to describe login result.
 client_connect(SenderId, Socket) ->
     case ets:match_object(user_table, {SenderId, '_', '_'}) of
         [] ->
             ets:insert(user_table, {SenderId, 1, Socket}),
-            gen_tcp:send(Socket, term_to_binary("Your named " ++ SenderId ++ " logined.\n")),
-            io:format("User ~p logined in\n", [SenderId]);
-        [_, 1, _] ->
-            io:format("Name has already used and connected");
-        [_Ok] ->
-            ets:update(user_table, SenderId, [{2, 1}, {3, Socket}])
+            io:format("User ~p logined in.\n", [SenderId]),
+            "Your named " ++ SenderId ++ " register just now and logined.";
+        [{_, 1, _}] ->
+            "Name has already used and connected";
+        [_] ->
+            ets:update_element(user_table, SenderId, [{2, 1}, {3, Socket}]),
+            "Your named " ++ SenderId ++ " logined."
         end.
 
 %% user disconnect
 client_disconnect(SenderId, Socket) ->
     case ets:match_object(user_table, {SenderId, 1, Socket}) of
-        [_, _, _] ->
-            ets:delete(user_table, {SenderId, '_', '_'}),
-            gen_tcp:close(Socket)
+        [{_, _, _}] ->
+            %% gen_tcp:close(Socket),
+            ets:update_element(user_table, {SenderId, {2, 0}, {3, 0}}),
+            "Your name " ++ SenderId ++ "logouted."
     end.
 
 private_chat(SenderId, ReceiverId, Message) ->
-    %% if receiver is online.
-    case ets:match_object(user_table, {ReceiverId, 1, '_'}) of
+    %% case receiver.
+    case ets:match_object(user_table, {ReceiverId, '_', '_'}) of
+        %% Does not exist.
         [] ->
-            io:format("Receiver is offline~n");
-        [_, _, ReceiverSocket] ->
-            gen_tcp:send(ReceiverSocket, term_to_binary(SenderId ++ "said:\n" ++ Message))
-        end.
+            DoesNotExist = "Receiver does not exist.",
+            io:format(DoesNotExist),
+            DoesNotExist;
+        %% OffLine.
+        [{'_', 0, '_'}] ->
+            "Receiver offline.";
+        %% Online. And send message.
+        [{_, 1, ReceiverSocket}] ->
+            message_send(SenderId, ReceiverSocket, Message),
+%            gen_tcp:send(ReceiverSocket, term_to_binary(SenderId ++ " said: " ++ Message)),
+            "Send to" ++ ReceiverId ++ " Succeed."
+    end.
 
-room_chat(SenderId, Message) ->
+room_chat(SenderId, Socket, Message) ->
     case ets:match_object(user_table, {'_', 1, '_'}) of
-        [_, 1, Socket] ->
-            gen_tcp:send(Socket, term_to_binary(SenderId ++ "said:\n" ++ Message));
-        [] ->
-            "No one online."
-        end.
+        [{SenderId, 1, Socket}] ->
+            "No one online.";
+        [{ReceiverId, 1, ReceiverSocket}] ->
+            if
+                SenderId =:= ReceiverId ->
+                    next;
+                true ->
+                    message_send(SenderId, ReceiverSocket, Message),
+                    "Message to Room Sended."
+            end
+%            gen_tcp:send(Socket, term_to_binary(SenderId ++ " said: " ++ Message)),
+    end.
+
+message_send(SenderId, ReceiverSocket, Message) ->
+    gen_tcp:send(ReceiverSocket, term_to_binary(SenderId ++ " said: " ++ Message)).
