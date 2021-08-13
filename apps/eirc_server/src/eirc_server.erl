@@ -57,7 +57,7 @@ loop(Socket) ->
                     gen_tcp:send(Socket, term_to_binary(PrivateResult)),
                     loop(Socket);
                 Signal =:= room_chat ->
-                    RoomChatRes = room_chat(SenderId, Socket, Message),
+                    RoomChatRes = room_chat(SenderId, Message),
                     gen_tcp:send(Socket, term_to_binary(RoomChatRes)),
                     loop(Socket);
                 %% and so on behavior
@@ -82,7 +82,7 @@ client_connect(SenderId, Socket) ->
         [_] ->
             ets:update_element(user_table, SenderId, [{2, 1}, {3, Socket}]),
             "Your named " ++ SenderId ++ " logined."
-        end.
+    end.
 
 %% user disconnect
 client_disconnect(SenderId, Socket) ->
@@ -111,20 +111,10 @@ private_chat(SenderId, ReceiverId, Message) ->
             "Send to" ++ ReceiverId ++ " Succeed."
     end.
 
-room_chat(SenderId, Socket, Message) ->
-    case ets:match_object(user_table, {'_', 1, '_'}) of
-        [{SenderId, 1, Socket}] ->
-            "No one online.";
-        [{ReceiverId, 1, ReceiverSocket}] ->
-            if
-                SenderId =:= ReceiverId ->
-                    next;
-                true ->
-                    message_send(SenderId, ReceiverSocket, Message),
-                    "Message to Room Sended."
-            end
-%            gen_tcp:send(Socket, term_to_binary(SenderId ++ " said: " ++ Message)),
-    end.
+room_chat(SenderId, Message) ->
+    lists:foreach(fun({_, 1, Socket}) ->
+                          gen_tcp:send(Socket, term_to_binary(SenderId ++ " said to everyone: " ++ Message)) end,
+                          ets:match_object(user_table, {'_', 1, '_'})).
 
 message_send(SenderId, ReceiverSocket, Message) ->
     gen_tcp:send(ReceiverSocket, term_to_binary(SenderId ++ " said: " ++ Message)).
