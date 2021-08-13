@@ -8,7 +8,9 @@
 % start server and Listen port 2345.
 start_server() ->
     %% maintain user data.
-    ets:new(id, [ordered_set, public, named_table, {write_concurrency, true}, {read_concurrency, true}]),
+    ets:new(user_table, [ordered_set, public, named_table, {write_concurrency, true}, {read_concurrency, true}]),
+    %%   atom(),           ordered     \|/        named               \                          /
+    %%      list_of_options[],any process could read|write             \_  Performance tuning. _/
     case gen_tcp:listen(?LISTEN_PORT,
                    [binary, {packet, 4},
                     {reuseaddr, true},
@@ -40,42 +42,66 @@ client_connect(ListenSocket) ->
 loop(Socket) ->
     receive
         {tcp, Socket, Bin} ->
-            [Id, Sign, SendId, Message] = binary_to_term(Bin),
+            [SenderId, Signal, ReceiverId, Message] = binary_to_term(Bin),
             if
-                Sign =:= register_user -> register_user(Id, Socket);
-                true -> io:format("Error sign ~p~n"),
+                Signal =:= client_connect ->
+                    client_connect(SenderId, Socket),
+                    loop(Socket);
+                Signal =:= client_disconnect ->
+                    client_disconnect(SenderId, Socket),
+                    loop(Socket);
+                Signal =:= private_chat ->
+                    private_chat(SenderId, ReceiverId, Message),
+                    loop(Socket);
+                Signal =:= room_chat ->
+                    room_chat(SenderId, Message),
+                    loop(Socket);
+                %% Signal =:= register_user -> register_user(SenderId, Socket);
+                %% Signal =:= login_user -> login_user(SenderId, Socket);
+                %% Signal =:= logout_user -> logout_user(SenderId, Socket);
+                %% and so on behavior
+                true -> io:format("Error signal ~p~n"),
                         loop(Socket)
             end;
         {tcp_closed, Socket} ->
             io:format("Server socket closed~n")
     end.
 
-register_user(Id, Socket) ->
-    case ets:lookup(id, Id) of
+%% user connect and auto login
+
+client_connect(SenderId, Socket) ->
+    case ets:match_object(user_table, {SenderId, '_', '_'}) of
+        [] ->
+            ets:insert(user_table, {SenderId, 1, Socket}),
+            gen_tcp:send(Socket, term_to_binary("Your named " ++ SenderId ++ " logined.\n")),
+            io:format("User ~p logined in\n", [SenderId]);
+        [_, 1, _] ->
+            io:format("Name has already used and connected");
         [_Ok] ->
-            io:format("Account already exists. ~n");
-        _ ->
-            ets:insert(id, {Id, 0, Socket}),
-            io:format("User register succeed. ~n")
+            ets:update(user_table, SenderId, [{2, 1}, {3, Socket}])
+        end.
+
+%% user disconnect
+client_disconnect(SenderId, Socket) ->
+    case ets:match_object(user_table, {SenderId, 1, Socket}) of
+        [_, _, _] ->
+            ets:delete(user_table, {SenderId, '_', '_'}),
+            gen_tcp:close(Socket)
     end.
 
+private_chat(SenderId, ReceiverId, Message) ->
+    %% if receiver is online.
+    case ets:match_object(user_table, {ReceiverId, 1, '_'}) of
+        [] ->
+            io:format("Receiver is offline~n");
+        [_, _, ReceiverSocket] ->
+            gen_tcp:send(ReceiverSocket, term_to_binary(SenderId ++ "said:\n" ++ Message))
+        end.
 
-
-%% chat_with_user(SendId, Socket, Message) ->
-%%     case ets:match_object(id, {'_', '_', 1, Socket}) of
-%%         % match the specific connection.
-%%         [{Id, _, _, _}] ->
-%%             Result = ets:match_object(id, {SendId, '_', 1, '_'}),
-%%             case Result =:= [] of
-%%                 true ->
-%%                     io:format("The user is offline ~p ~n", [Result]);
-%%                 _    ->
-%%                     send_to_user(Result, Id, Message)
-%%             end;
-%%         _ -> io:format("Private chat fails~n")
-%%     end.
-
-
-%% send_to_user([Info], Id, Message) ->
-%%     {_, _, _, Socket} = Info,
-%%     gen_tcp:send(Socket, term_to_binary("Message from" ++ integer_to_list(Id) ++ ": " ++ Message)).
+room_chat(SenderId, Message) ->
+    case ets:match_object(user_table, {'_', 1, '_'}) of
+        [_, 1, Socket] ->
+            gen_tcp:send(Socket, term_to_binary(SenderId ++ "said:\n" ++ Message));
+        [] ->
+            "No one online."
+        end.
